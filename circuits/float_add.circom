@@ -147,6 +147,15 @@ template CheckBitLength(b) {
     signal output out;
 
     // TODO
+    var bits[b];
+    for(var i=0; i<b; i++) {
+        bits[i] = 1;
+    }
+    component b2n = Bits2Num(b);
+    b2n.bits <== bits;
+    component lt = LessThan(b);
+    lt.in <== [in, b2n.out];
+    out <== lt.out;
 }
 
 /*
@@ -195,6 +204,13 @@ template RightShift(shift) {
     signal output y;
 
     // TODO
+    signal inter <-- x >> shift;
+    y <== inter;
+    component lt = LessThan(shift);
+    var amount = 2**shift;
+    lt.in[0] <== x - inter * amount;
+    lt.in[1] <== amount;
+    lt.out === 1;
 }
 
 /*
@@ -255,6 +271,26 @@ template LeftShift(shift_bound) {
     signal output y;
 
     // TODO
+    if(1-skip_checks) {
+        log("made it to checks");
+        assert(shift>=0);
+        assert(shift_bound > shift);
+    }
+    
+    signal inter <-- 2 ** shift;
+    y <== x * inter;
+
+    var len = 32;
+
+    signal tempx[len];
+    signal tempy[len];
+    for(var i=0; i<len; i++) {
+        tempy[i] <-- (y >> (i + shift)) & 1;
+        tempx[i] <-- (x >> i) & 1;
+        tempx[i] * (1 - tempx[i]) === 0;
+        tempy[i] * (1 - tempy[i]) === 0;
+        tempy[i] === tempx[i];
+    }
 }
 
 /*
@@ -270,6 +306,28 @@ template MSNZB(b) {
     signal output one_hot[b];
 
     // TODO
+    if(1-skip_checks) {
+        assert(in > 0);
+    }
+
+    component ie[b];
+    component lt[b][2];
+    for(var i=0; i<b; i++){
+        one_hot[i] <-- 2**i <= in && in < 2**(i+1);
+
+        ie[i] = IsEqual();
+        ie[i].in[0] <== 2**i;
+        ie[i].in[1] <== in;
+
+        lt[i][0] = LessThan(b);
+        lt[i][1] = LessThan(b);
+        lt[i][0].in[0] <== 2**i;
+        lt[i][0].in[1] <== in;
+        lt[i][1].in[0] <== in;
+        lt[i][1].in[1] <== 2**(i+1);
+
+        one_hot[i] === lt[i][0].out*lt[i][1].out + ie[i].out;
+    }
 }
 
 /*
@@ -288,6 +346,20 @@ template Normalize(k, p, P) {
     assert(P > p);
 
     // TODO
+    component msnzb = MSNZB(P+1);
+    msnzb.in <== m;
+    msnzb.skip_checks <== skip_checks;
+    var ell;
+    for(var i=0; i<P+1; i++) {
+        ell += i * msnzb.one_hot[i];
+    }
+
+    component ls = LeftShift(P+1);
+    ls.x <== m;
+    ls.shift <== (P-ell);
+    ls.skip_checks <== skip_checks;
+    m_out <== ls.y;
+    e_out <== e + ell - p;
 }
 
 /*
@@ -304,4 +376,39 @@ template FloatAdd(k, p) {
     signal output m_out;
 
     // TODO
+    component cwf[2];
+    for(var i=0; i<2; i++) {
+        cwf[i] = CheckWellFormedness(k, p);
+        cwf[i].e <== e[i];
+        cwf[i].m <== m[i];
+    }
+
+    var mag1 = (e[0] << (p+1)) + m[0];
+    var mag2 = (e[1] << (p+1)) + m[1];
+
+    var alpha[2];
+    var beta[2];
+    if(mag1 > mag2) {
+        alpha[0] = e[0];
+        alpha[1] = m[0];
+        beta[0] = e[1];
+        beta[1] = m[1];
+    } else {
+        alpha[0] = e[1];
+        alpha[1] = m[1];
+        beta[0] = e[0];
+        beta[1] = m[0];    
+    }
+    var diff = alpha[0] - beta[0];
+    component lt = LessThan(k);
+    lt.in[0] <== p+1;
+    lt.in[1] <== diff;
+
+    component iz = IsZero();
+    iz.in <-- alpha[0];
+    signal inter1 <-- iz.out * alpha[0];
+    signal inter2 <-- iz.out * alpha[1];
+    e_out <== lt.out * alpha[0] + inter1;
+    m_out <== lt.out * alpha[1] + inter2;
+
 }
